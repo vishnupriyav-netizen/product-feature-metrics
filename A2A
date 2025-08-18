@@ -1,0 +1,45 @@
+
+with eligible_base as(
+select DISTINCT a.account_id, a.business_name, a.seller_email from 
+datamart_account_metadata a where vendor_payout = 'enabled'  and 
+ seller_email not like '%@tazapay.com' and seller_email not like '%@tazapay.io'
+ and seller_email not like '%@digitrade.app'
+and seller_email not in (
+'pooranima2000@gmail.com', 'chidambarams717@gmail.com', 'dhamu+mfa@tpay.com', 'testfire6996@gmail.com',
+'kumaravelukce+prod@gmail.com', 'monishaprod@zbwqcfc5.mailosaur.net'
+)),
+
+
+payout_base as(
+select a.account_id as payout_merchant, a.payout_id, a.transaction_description, description as use_case, a.payout_amount, a.payout_currency,
+cast(case when a.payout_currency = 'usd' then a.payout_amount 
+else cast(cast(a.payout_amount as decimal(38,10)) * cast(a.rate_in_pcy_to_usd as decimal(38,10)) as decimal(76,38)) end as decimal(76,38)) as payout_amount_usd,
+rate_in_pcy_to_usd,
+a.txn_source,
+a.payout_created_at 
+from datamart_payout a where transfer_type = 'tazapay_account' and a.payout_attempt_status = 'succeeded'
+),
+
+full_join_account_and_payouts as (
+select a.account_id, a.business_name, b.* from eligible_base a
+full outer join payout_base b on a.account_id = b.payout_merchant
+where a.account_id is not null and a.account_id != ''
+),
+
+collect_base as (
+select a.account_id as collect_merchant, a.payin_id, a.psp_reference_id
+from payin a 
+where a.payment_method_type = 'tazapay_account_transfer' and a.payment_attempt_status = 'succeeded' 
+)
+
+select a.account_id, case when a.business_name = '' then null else a.business_name end as business_name ,
+a.payout_merchant, b.collect_merchant, a.payout_id, psp_reference_id, b.payin_id, case when date(payout_created_at) < date(2020-01-01) then null else date(payout_created_at)
+end as payout_created_at,  
+a.txn_source, use_case, a.transaction_description, payout_amount_usd, 
+-- case when payout_currency = 'USD'then a.payout_amount else a.payout_amount * rate_in_usd end as payout_amount_usd,
+a.payout_currency
+
+from full_join_account_and_payouts a 
+left join collect_base b on a.payout_id = b.psp_reference_id
+
+
