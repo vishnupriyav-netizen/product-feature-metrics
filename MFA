@@ -1,0 +1,42 @@
+-- seper set (base data)
+
+
+select * from datamart.datamart_user_profile where email not like '%@tazapay.com' and email NOT IN (
+    'pooranima2000@gmail.com',
+    'chidambarams717@gmail.com',
+    'dhamu+mfa@tpay.com'
+  )
+  and 
+
+last_loggedin_at >= '2025-07-21'::date - INTERVAL '1 months'
+
+
+
+
+-- beekeeper (base data)
+
+select a.email, b.*, c.last_loggedin_at
+  from 
+(select user_id, email from usr where email not  LIKE '%@tazapay.com'
+and email not in (
+'pooranima2000@gmail.com', 'chidambarams717@gmail.com', 'dhamu+mfa@tpay.com')
+) a
+left join (select  * from config_user_mfa where status = 'enabled') b
+on a.user_id = b.user_id
+left join user_metadata c on a.user_id = c.user_id
+where last_loggedin_at >= '2025-07-21'::date - INTERVAL '1 months' 
+
+
+-- sueprset final 
+-- mfa dsbs review 
+with base as (
+select * from datamart.datamart_user_profile where email not like '%@tazapay.com' and email NOT IN (
+    'pooranima2000@gmail.com',
+    'chidambarams717@gmail.com',
+    'dhamu+mfa@tpay.com'
+  )
+  and 
+
+last_loggedin_at >= '2025-07-21'::date - INTERVAL '1 months')
+
+select count(*) as total, COUNT(CASE WHEN status = 'enabled' THEN 1 END) as done from base
