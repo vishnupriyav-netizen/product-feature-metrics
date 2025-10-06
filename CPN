@@ -1,0 +1,11 @@
+-- kyb (clickh)
+
+select a.entity_id, a.country_code, a.business_name, a.source, a.relationship, c.status, c.approved_at, c.submitted_at, c.rejected_at, c.type
+
+
+from datalake.clean_entity a 
+left join datalake.clean_entity_application  b on a.entity_id = b.entity_id
+left join datalake.clean_kyb_application  c on c.application_id = b.application_id
+where account_id = 'acc_d0dn8e1sk7m5jjgnuek0' and relationship = 'customer'
+and business_name not in ('Test FI', 'Conduit Technology Inc', 'NEBULA NETWORK SA DE CV', 'HIFI Bridge Inc.', 
+'Alice Johnson') and a.entity_id not in ('ent_d1i0s9r5fte0dnghifig','ent_d3a51vsnlgu4nhck8s40')
