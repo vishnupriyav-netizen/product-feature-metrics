@@ -1,0 +1,152 @@
+with payout_filtered as
+(
+  SELECT 
+    *
+  FROM datalake.clean_payout
+  where date(created_at)> DATE('2025-07-01') AND status = 'succeeded'
+  ),
+  
+  payout_attempt_filtered as
+  (
+    SELECT
+        payout_attempt_id,
+        payout_id,
+        provider,
+        row_number() OVER (PARTITION BY payout_id ORDER BY created_at asc) AS first_provider_filter,
+        row_number() OVER (PARTITION BY payout_id ORDER BY created_at DESC) AS final_provider_filter
+    FROM datalake.clean_payout_attempt
+    WHERE date(created_at)> DATE('2025-08-01')
+    ),
+    first_provider as 
+    (
+    SELECT
+        payout_id,
+        provider
+    FROM payout_attempt_filtered
+    where first_provider_filter =1
+    ),
+    final_provider as 
+    (
+    SELECT
+        payout_id,
+        provider
+    FROM payout_attempt_filtered
+    where final_provider_filter =1
+    ),  
+    
+    destinatio_cur_ref as (
+    select payout_attempt_id, destination_currency from datamart_payout Where date(created_at)> DATE('2025-08-01')
+    ), 
+    
+    payout_attempt_transition_filtered as 
+    (
+      SELECT
+        payout_attempt_id,
+        CASE WHEN created_by = 'system' THEN 1 ELSE 0 END as auto_flag,
+        CASE WHEN created_by <> 'system' THEN 1 ELSE 0 END as manual_flag,
+        created_at
+      FROM datalake.clean_payout_attempt_status_transition
+      Where date(created_at)> DATE('2025-08-01')
+     ),
+     
+     
+     transition_data as  
+     (
+     SELECT
+        payout_attempt_id,
+        SUM(auto_flag) as auto_flag_sum,
+        sum(manual_flag) as manual_flag_sum,
+        MIN(created_at) as start_date_1,
+        MAX(created_at) as end_date_1
+     FROM payout_attempt_transition_filtered
+     Group by 1 
+     ),
+     
+   combined_data as 
+   (
+      Select
+        a.payout_id as payout_id,
+    formatDateTime(a.created_at, '%y-%m') as created_at,
+        a.account_id,
+        a.beneficiary_id,
+        a.user_id,
+        a.currency,
+        a.amount,
+        a.holding_currency,
+        f.destination_currency,
+        a.transfer_type,
+        a.charge_type,
+        a.status,
+        b.provider,
+        c.payout_attempt_id as payout_attempt_id,
+        c.auto_flag_sum,
+        c.manual_flag_sum,
+        c.start_date_1,
+        c.end_date_1,
+        d.provider as first_provider,
+        e.provider as final_provider
+      FROM payout_filtered a 
+      LEFT JOIN payout_attempt_filtered b 
+      ON a.payout_id = b.payout_id
+      LEFT JOIN transition_data c
+      on b.payout_attempt_id = c.payout_attempt_id
+      LEFT JOIN first_provider d  
+      on a.payout_id = d.payout_id
+      LEFT JOIN final_provider e  
+      On a.payout_id = e.payout_id
+      left join destinatio_cur_ref f 
+      on b.payout_attempt_id = f.payout_attempt_id
+      ),
+      
+      final as (
+      -- bcl payout TAT analysis 
+      select
+      created_at,
+       auto_flag_sum,
+        payout_id,
+        account_id,
+        beneficiary_id,
+        user_id,
+        currency,
+        amount,
+        destination_currency,
+        transfer_type,
+        charge_type,
+        status,
+        first_provider,
+        final_provider,
+        COUNT(payout_attempt_id) as count_of_attempt,
+        CASE 
+            WHEN SUM(auto_flag_sum)> 0 AND SUM(manual_flag_sum)> 0 THEN 'both'
+            WHEN SUM(auto_flag_sum)> 0 AND SUM(manual_flag_sum)= 0 THEN 'auto'
+            ELSE 'manual'
+        END as auto_manual,
+        MIN(start_date_1) as start_date,
+        MAX(end_date_1) as end_date,
+        dateDiff('second', MIN(start_date_1), MAX(end_date_1)) AS payout_tat
+       FROM combined_data
+    Group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14) 
+    
+    -- select payout_id from final 
+    -- where transfer_type = 'local' and destination_currency IN ('DKK', 'AUD', 'GBP','EUR') and 
+    -- auto_manual = 'auto' and final_provider = 'bankingcircle'
+    -- order by created_at desc limit 40
+    
+    select 
+    created_at,
+    first_provider,
+        final_provider,
+    auto_manual,
+    status,
+    -- case when payout_tat <= 1140 then '<=19 minutes' else '>19 minutes' end as payout_tat_fl,
+    payout_tat,
+    destination_currency, count(*) as payout_count
+    from final
+    where transfer_type = 'local' and destination_currency IN ('DKK', 'AUD', 'GBP','EUR') and final_provider = 'bankingcircle'
+    group by 1,2,3,4,5,6,7
+    
+
+    
+    -- add destination currenyc 
+    -- take only final status = succeded 
+    -- 
