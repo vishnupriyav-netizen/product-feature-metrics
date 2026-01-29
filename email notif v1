@@ -1,0 +1,11 @@
+-- email notificaitons - feature usage in user level 
+
+
+select splitByChar('.', event)[1] as object,
+splitByChar('.', event)[2] AS sub_event,
+
+a.*, b.business_name, c.email from datalake.clean_config_user_email_event a 
+
+left join datalake.clean_account b on a.account_id = b.account_id
+left join datalake.clean_usr c on a.user_id = c.user_id 
+where c.email not like '%@tazapay.com' and c.email not like '%@digitrade.com'
