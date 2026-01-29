@@ -1,0 +1,60 @@
+with default_event AS (
+    SELECT 
+    role,event, splitByChar('.', event)[1] AS object, splitByChar('.', event)[2] AS sub_event,
+        status AS default_status,
+     created_at AS default_created_at
+    FROM datalake.clean_config_default_email_event
+   
+),
+
+/* 2️⃣ Custom config (filtered early) */
+custom_event AS (
+    SELECT
+        account_id,
+        user_id,
+        event,
+        status AS custom_status,
+        splitByChar('.', event)[1] AS object, 
+        splitByChar('.', event)[2] AS sub_event,
+        created_at AS custom_created_at
+    FROM datalake.clean_config_user_email_event cu
+    inner JOIN datalake.clean_usr u
+        ON cu.user_id = u.user_id
+       AND u.email NOT LIKE '%@tazapay.com'
+       AND u.email NOT LIKE '%@digitrade.com'
+)
+
+-- select count(*) from datalake.clean_config_user_email_event
+
+/* 3️⃣ Final effective config */
+SELECT
+    ua.account_id as account_id ,
+    ua.user_id as user_id,
+    de.event as event,
+    de.object,
+    de.sub_event,
+
+  custom_status, default_status,
+  case when custom_status <> '' then custom_status else default_status end as status,
+
+    /* timestamps */
+    de.default_created_at,
+    ce.custom_created_at,
+  
+    acc.business_name,
+    usr.email
+
+FROM datalake.clean_user_account ua
+LEFT JOIN default_event de
+    ON ua.role = de.role
+LEFT JOIN custom_event ce
+    ON ua.account_id = ce.account_id
+   AND ua.user_id = ce.user_id
+   AND de.event = ce.event
+LEFT JOIN datalake.clean_account acc
+    ON ua.account_id = acc.account_id
+LEFT JOIN datalake.clean_usr usr
+    ON ua.user_id = usr.user_id
+    where   usr.email NOT LIKE '%@tazapay.com'
+       AND usr.email NOT LIKE '%@digitrade.com'
+    ;
