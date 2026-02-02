@@ -1,0 +1,5 @@
+select  toDate(a.created_at) as created_at, a.industry as AI_industry_classification, b.industry as overriden_industry_classification , count(*) as Num_business_accounts
+from datalake.clean_industry_classification  a 
+left join datalake.clean_compliance_industry_classification b on a.business_name = b.business_name
+where a.industry <> 'N/A'
+group by 1,2,3
