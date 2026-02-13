@@ -1,13 +1,10 @@
 WITH benchmark_accounts AS (
-    SELECT distinct account_id
-    FROM
-    (
+    SELECT DISTINCT account_id
+    FROM (
         SELECT account_id, 'markup' as type, markup_pct as mark_pct
         FROM datalake.clean_config_account_fx_markup
         WHERE apply_benchmark_spread = 'true'
-
         UNION ALL
-
         SELECT account_id, 'markdown' as type, markdown_pct as mark_pct
         FROM datalake.clean_config_account_fx_markdown
         WHERE apply_benchmark_spread = 'true'
@@ -18,53 +15,70 @@ WITH benchmark_accounts AS (
         'acc_d5q65emimjo249spka40'
     )
 ),
-
- payout_info as (
-select business_name, account_id, payout_id, payout_attempt_id, payout_created_at, balance_currency, payout_currency, destination_currency, 
-
-CASE
-    WHEN payout_currency in ('usd', 'USD') then payout_amount / 100.0
-   WHEN payout_currency in ('btc','BTC') then (payout_amount / 100000000.0) * cast(rate_in_pcy_to_usd as Float64)
-    ELSE (payout_amount / 100.0) * CAST(rate_in_pcy_to_usd AS Float64)
-    END as tpv_usd,
-
-1 - (toFloat64(payout_fx_rate) / nullIf(toFloat64(payout_xe_fx_rate), 0)) AS payout_fx_markdown_pct,
-
-       ( 1 - toFloat64(balance_fx_rate) / toFloat64(balance_xe_fx_rate)
-    ) AS balance_fx_markdown_perct
-
-
-
-from datamart_payout where toDate(payout_created_at) >= toDate('2025-01-01') and
-payout_attempt_status = 'succeeded' and account_id in (select * from benchmark_accounts)
-
+payout_info AS (
+    SELECT 
+        p.business_name, 
+        p.account_id, 
+        p.payout_id, 
+        p.payout_attempt_id, 
+        p.payout_created_at, 
+        p.balance_currency, 
+        p.payout_currency, 
+        p.destination_currency,
+        CASE
+            WHEN p.payout_currency IN ('usd', 'USD') 
+                THEN p.payout_amount / 100.0
+            WHEN p.payout_currency IN ('btc', 'BTC') 
+                THEN (p.payout_amount / 100000000.0) * CAST(p.rate_in_pcy_to_usd AS Float64)
+            ELSE (p.payout_amount / 100.0) * CAST(p.rate_in_pcy_to_usd AS Float64)
+        END AS tpv_usd,
+        COALESCE(1 - (toFloat64(p.payout_fx_rate) / NULLIF(toFloat64(p.payout_xe_fx_rate), 0)), 0) AS payout_fx_markdown_pct,
+        COALESCE(1 - (toFloat64(p.balance_fx_rate) / NULLIF(toFloat64(p.balance_xe_fx_rate), 0)), 0) AS balance_fx_markdown_pct,
+        IF(p.payout_currency <> p.destination_currency, 1, 0) AS payout_fx_flag,
+        IF(p.balance_currency <> p.payout_currency, 1, 0) AS balance_fx_flag
+    FROM datamart_payout p
+    INNER JOIN benchmark_accounts ba ON p.account_id = ba.account_id
+    WHERE p.payout_attempt_status = 'succeeded' 
+      AND toDate(p.payout_created_at) >= toDate('2025-11-01')
 )
--- select * from payin_info
-, 
-
-quote as (
-select a.payout_id, a.payout_attempt_id,
--- invoice_currency, charge_currency, holding_currency, settlement_currency,
-a.holding_fx_quote_id, a.destination_fx_quote_id , b.quote_id, 
-b.benchmark_rate, b.benchmark_pct, b."to" as to_currency, b."from" as from_currency
-
-from datamart_payout  a 
-left join datalake.clean_fx_quote b on a.destination_fx_quote_id = b.quote_id or a.holding_fx_quote_id = b.quote_id
-where toDate(payout_created_at) >= toDate('2025-01-01') and
-payout_attempt_status = 'succeeded' and account_id in (select * from benchmark_accounts)
--- where a.payin_id in (select payin_id from payin_info)
--- where a.account_id in (select * from benchmark_accounts)
-
+-- select * from payout_info
+,
+quote AS (
+    SELECT 
+        a.payout_attempt_id,
+        a.holding_fx_quote_id, 
+        a.destination_fx_quote_id, 
+        b.quote_id, 
+        b.benchmark_rate, 
+        b.benchmark_pct, 
+        b."to" AS to_currency, 
+        b."from" AS from_currency
+    FROM datamart_payout a 
+    LEFT JOIN datalake.clean_fx_quote b 
+        ON a.destination_fx_quote_id = b.quote_id 
+        OR a.holding_fx_quote_id = b.quote_id
+    -- WHERE a.payout_attempt_id IN (SELECT payout_attempt_id FROM payout_info)
 )
 
-select a.business_name, a.account_id, a.payout_id, a.payout_created_at, a.tpv_usd, 
-from_currency, to_currency, case when benchmark_pct > 0 then 1 else 0 end as fl_is_benchmark_rate,
-
-if(payout_currency != destination_currency, tpv_usd * payout_fx_markdown_pct,0) AS payout_fx_revenue_usd,
-if(balance_currency <> payout_currency ,if(isFinite(balance_fx_markdown_perct),toDecimal128(tpv_usd * balance_fx_markdown_perct, 8),
- toDecimal128(0, 8)),toDecimal128(0, 8)) AS balance_fx_revenue_usd
-, b.benchmark_rate, b.benchmark_pct,  quote_id
-
-from payout_info a 
-left join quote b on a.payout_attempt_id = b.payout_attempt_id
-
+-- select * from quote
+SELECT 
+    a.business_name, 
+    a.account_id, 
+    a.payout_id, 
+    a.payout_created_at, 
+    a.balance_currency,
+    a.payout_currency,
+    a.destination_currency,
+    a.tpv_usd,
+    b.from_currency, 
+    b.to_currency, 
+    IF(b.benchmark_pct > 0, 1, 0) AS fl_is_benchmark_rate,
+    IF(a.payout_fx_flag = 1, a.tpv_usd * a.payout_fx_markdown_pct, 0) AS payout_fx_revenue_usd,
+    IF(a.balance_fx_flag = 1 AND isFinite(a.balance_fx_markdown_pct), 
+        a.tpv_usd * a.balance_fx_markdown_pct, 0) AS balance_fx_revenue_usd,
+    b.benchmark_rate, 
+    b.benchmark_pct, 
+    b.quote_id
+FROM payout_info a 
+LEFT JOIN quote b ON a.payout_attempt_id = b.payout_attempt_id
+ORDER BY a.payout_created_at DESC
