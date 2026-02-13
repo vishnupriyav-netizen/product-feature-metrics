@@ -1,0 +1,64 @@
+WITH benchmark_accounts AS (
+    SELECT distinct account_id
+    FROM
+    (
+        SELECT account_id, 'markup' as type, markup_pct as mark_pct
+        FROM datalake.clean_config_account_fx_markup
+        WHERE apply_benchmark_spread = 'true'
+
+        UNION ALL
+
+        SELECT account_id, 'markdown' as type, markdown_pct as mark_pct
+        FROM datalake.clean_config_account_fx_markdown
+        WHERE apply_benchmark_spread = 'true'
+    )
+    WHERE account_id NOT IN (
+        'acc_cpmje7v90nmekbr0i66g',
+        'acc_d51q8e1r92cb83pujstg',
+        'acc_d5q65emimjo249spka40'
+    )
+),
+
+ payin_info as (
+select account_id, payin_id, payment_attempt_id, payin_created_at, invoice_currency, charge_currency, holding_currency, settlement_currency, 
+
+case
+when invoice_currency in ('usd','USD')
+then toFloat64(customer_paid_amount_icy) / 100
+when invoice_currency in ('BTC','btc') then toFloat64(customer_paid_amount_icy) * rate_in_icy_to_usd  / 100000000
+else toFloat64(customer_paid_amount_icy) * rate_in_icy_to_usd / 100
+end as tpv_usd,
+
+COALESCE((toFloat64(payin_final_fx_rate) / NULLIF(toFloat64(payin_base_fx_rate), 0) - 1),0) AS buyer_fx_markup_pct,
+COALESCE((1 - (toFloat64(holding_final_fx_rate) /  NULLIF(toFloat64(holding_base_fx_rate), 0))),0) AS holding_fx_markdown_pct,
+COALESCE((1 - (toFloat64(payout_final_fx_rate) / NULLIF(toFloat64(payout_base_fx_rate), 0))),0) AS payout_fx_markdown_pct
+
+from payin where payment_attempt_status = 'succeeded' and account_id in (select * from benchmark_accounts)
+
+)
+-- select * from payin_info
+, 
+
+quote as (
+select a.payin_id, a.payment_attempt_id, a.fx_quote_id, a.holding_fx_quote_id , b.quote_id, b.benchmark_rate, b.benchmark_pct
+
+from datalake.clean_payment_attempt  a 
+left join datalake.clean_fx_quote b on a.fx_quote_id = b.quote_id or a.holding_fx_quote_id = b.quote_id
+-- where a.payin_id in (select payin_id from payin_info)
+-- where a.account_id in (select * from benchmark_accounts)
+
+)
+
+select a.account_id, a.payin_id, a.payin_created_at, a.tpv_usd, 
+COALESCE(multiIf(a.invoice_currency <> a.charge_currency, a.tpv_usd * a.buyer_fx_markup_pct, 0),0) AS  buyer_fx_revenue_usd,
+COALESCE(multiIf(a.invoice_currency <> a.holding_currency, a.tpv_usd  * a.holding_fx_markdown_pct, 0),0) AS holding_fx_revenue_usd,
+COALESCE(multiIf(a.holding_currency <> settlement_currency, a.tpv_usd * a.payout_fx_markdown_pct, 0),0) AS payout_fx_revenue_usd
+, b.* 
+
+from payin_info a 
+left join quote b on a.payment_attempt_id = b.payment_attempt_id
+
+
+
+
+
