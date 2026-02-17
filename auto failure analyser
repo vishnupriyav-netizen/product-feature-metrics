@@ -1,0 +1,68 @@
+with error_code_data as (
+
+SELECT
+	DISTINCT
+	TRIM(verbose) as final_verbose,
+	tzp_code as tzp_code,
+	TRIM(category) as category,
+	TRIM(tzp_code__v_text) as tzp_code__v_text
+FROM dlt.payout_verbose_details 
+),
+
+
+transition_timeline as(
+SELECT payout_attempt_id,
+max(if("to" = 'processing_retry' or "from" = 'processing_retry', 1, 0)) AS was_in_processing_retry
+FROM datalake.clean_payout_attempt_status_transition
+GROUP BY payout_attempt_id)
+
+
+
+SELECT 
+    p.payout_attempt_id,
+    p.business_name,
+    p.transfer_type,
+    p.final_rail_used,
+    p.destination_currency,
+    p.destination_country,
+    
+
+    p.failure_code,
+    p.error_code,
+    was_in_processing_retry,
+    
+    
+  CASE WHEN LENGTH(b.category) = 0 OR b.category IS NULL THEN c.category ELSE b.category END as error_code_type,
+  CASE WHEN length(b.final_verbose) = 0 OR b.final_verbose IS NULL THEN c.final_verbose ELSE b.final_verbose END as final_verbose_defined, 
+    
+
+    p.payout_created_at,
+
+    
+d.psp_reference_id, 
+d.response_status_code, 
+d.request as api_request, 
+d.response as api_response,
+e.status as webhook_status, 
+e.request as webhook_request
+    
+FROM datamart.datamart_payout p
+LEFT JOIN error_code_data b
+ON toString(p.error_code) = toString(b.tzp_code)
+LEFT JOIN error_code_data c
+ON p.failure_code = c.tzp_code__v_text
+left join datalake.clean_settlement_attempt_initiate_log d 
+on p.payout_attempt_id = d.reference_id
+left join datalake.clean_payout_attempt_webhook_log e 
+on p.payout_attempt_id = e.payout_attempt_id
+left join transition_timeline f 
+on p.payout_attempt_id = f.payout_attempt_id
+
+
+WHERE 
+    DATE(p.payout_created_at) = today() - INTERVAL 1 DAY
+    AND p.payout_attempt_status = 'failed'  
+
+    
+    
+
